@@ -1,0 +1,8 @@
+Replace the folder for the file, replace it according to the source code path
+There are two ways to replace files
+1. Press Add file here and then select Create new file and then replace the path and name of the file, paste the content in the big box below, and then save the green button at the bottom
+For example, to replace the banner, the path of the source code is 'package/base-files/files/etc/banner', press Add file and select Create new file, paste the path, paste the content in the big box below, and then save the green button at the bottom to complete
+
+2. Press Create new file here and select Upload files, then drag the file created by the folder path and name on your computer into it, wait for the file to be transferred, and then save the green button at the bottom.
+For example, to replace the banner, create a package folder on the computer, create a base-files folder in the package folder, create a files folder in the base-files folder, and create an etc folder in the files folder.
+Create a text document of banner.txt in the etc folder, set the content, then remove the .txt suffix to become the banner, then drag the package folder you created in, wait for the file to be transferred, and then press the bottom green button to save it. span

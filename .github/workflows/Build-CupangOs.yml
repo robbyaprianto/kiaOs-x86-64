@@ -1,0 +1,353 @@
+#
+# Thanks to p3terx the big god one click to compile the script
+# 
+# Copyright (C) 2019 P3TERX <https://p3terx.com>
+# <https://github.com/P3TERX/Actions-OpenWrt.git>
+#
+
+name: Compile CupangOs
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: 'Compile the OpenWrt firmware-SSH Remote: Off by default, change to "ssh" to open the SSH connection'
+        required: false
+        default: 'ssh-actions'
+
+
+# Timed trigger compilation (3 a.m. daily)
+#  schedule:
+#    - cron: 0 19 1,2,5,6,8,10,12,15,16,18,20,22,25,26,28,30 * *
+
+# Like ☆ Star trigger compilation
+#  watch:
+#    types: [started]
+
+
+env: 
+  TZ: Asia/Jakarta
+  GIT_USER_TOKEN: ${{ secrets.GIT_USER_TOKEN }}
+  WECHAT_WORK_URL: ${{ secrets.WECHAT_WORK_URL }}
+  WECHAT_WORK_TOKEN: ${{ secrets.WECHAT_WORK_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  GITHUB_RELEASE: https://github.com/db-one/Beta-OpenWrt-AutoBuild/releases
+
+jobs: 
+  build:
+    runs-on: Ubuntu-20.04
+    if: github.event.repository.owner.id == github.event.sender.id
+
+    name: compile ${{matrix.target}}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [Lean_x86_64,Lean_x86_64_Long]  #[Lean_x86_64,Lean_x86_64_Long]
+
+    steps:
+    - name: Ready to complete
+      uses: actions/checkout@v2
+
+    - name: Detect script settings
+      run: |
+        source "${GITHUB_WORKSPACE}/build/${{matrix.target}}/settings.ini"
+        echo "REPO_URL=${REPO_URL}" >> $GITHUB_ENV
+        echo "REPO_BRANCH=${REPO_BRANCH}" >> $GITHUB_ENV
+        echo "CONFIG_FILE=${CONFIG_FILE}" >> $GITHUB_ENV
+        echo "FIRMWARE_MESSAGE=${FIRMWARE_MESSAGE}" >> $GITHUB_ENV
+        echo "CUSTOM_SH=${CUSTOM_SH}" >> $GITHUB_ENV
+        echo "CACHE_BUILD=${CACHE_BUILD}" >> $GITHUB_ENV
+        echo "SSH_ACTIONS=${SSH_ACTIONS}" >> $GITHUB_ENV
+        echo "UPLOAD_FIRMWARE=${UPLOAD_FIRMWARE}" >> $GITHUB_ENV
+        echo "UPLOAD_QCOW2=${UPLOAD_QCOW2}" >> $GITHUB_ENV
+        echo "UPLOAD_VHDX=${UPLOAD_VHDX}" >> $GITHUB_ENV
+        echo "UPLOAD_VMDK=${UPLOAD_VMDK}" >> $GITHUB_ENV
+        echo "UPLOAD_IPK=${UPLOAD_IPK}" >> $GITHUB_ENV
+        echo "UPLOAD_CONFIG=${UPLOAD_CONFIG}" >> $GITHUB_ENV
+        echo "UPLOAD_WETRANSFER=${UPLOAD_WETRANSFER}" >> $GITHUB_ENV
+        echo "UPLOAD_RELEASE=${UPLOAD_RELEASE}" >> $GITHUB_ENV
+        echo "WECHAT_WORK_PUSH=${WECHAT_WORK_PUSH}" >> $GITHUB_ENV
+        echo "TELEGRAM_BOT=${TELEGRAM_BOT}" >> $GITHUB_ENV
+        #Add variables
+        echo "HOME=${GITHUB_WORKSPACE}/openwrt" >> $GITHUB_ENV
+        echo "WORKPATH=${GITHUB_WORKSPACE}/openwrt/build/${{matrix.target}}" >> $GITHUB_ENV
+
+    - name: Initialize the system environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        docker rmi `docker images -q`
+        sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android
+        sudo -E apt-get -y purge azure-cli ghc* zulu* hhvm llvm* firefox google* dotnet* powershell openjdk* adoptopenjdk* mysql* php* mongodb* dotnet* moby* snapd* || true
+        sudo -E apt-get update
+        sudo -E apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs gcc-multilib g++-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler antlr3 gperf swig libc6-dev-i386 libc6-dev libncurses5 libtinfo-dev libtinfo5 ncurses-doc python2.7 git-core wget curl rsync
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get clean
+
+        df -hT
+
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: Download ${{matrix.target}} source
+      working-directory: /workdir
+      run: |
+        df -hT $PWD
+        git clone -b $REPO_BRANCH --single-branch $REPO_URL openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: Cache acceleration
+      uses: klever1988/cachewrtbuild@main
+      if: env.CACHE_BUILD == 'true'
+      with:
+        ccache: 'true'
+        prefix: ${{ github.workspace }}/openwrt
+
+    - name: Update time zone, compile time
+      id: date
+      run: |
+        sudo timedatectl set-timezone "$TZ"
+        echo "::set-output name=status::success"
+        echo "FILE_TIME=$(date +"%m-%d %H.%M")" >> $GITHUB_ENV
+        echo "FILE_TIME1=$(date "+%Y年%m月%d日-%H点%M分")" >> $GITHUB_ENV
+        echo "FILE_TIME2=$(date "+%Y%m%d-%H%M")" >> $GITHUB_ENV
+        echo "Compilation start time..."
+        START_TIME=`date +'%Y-%m-%d %H:%M:%S'`
+        echo "START_SECONDS=$(date --date="$START_TIME" +%s)" >> $GITHUB_ENV
+
+    - name: Load the source, customize the files and generate the custom configuration
+      run: |
+        # Copy the configuration file to the source directory
+        cp -Rf `find ./ -maxdepth 1 -type d ! -path './openwrt' ! -path './'` openwrt
+        cd openwrt
+
+        echo "Execute the script"
+        if [ -f "${WORKPATH}/$CUSTOM_SH" ]; then
+        (
+          chmod +x ${WORKPATH}/$CUSTOM_SH
+          /bin/bash "${WORKPATH}/$CUSTOM_SH"
+        )
+        fi
+
+        echo "Copy the files..."
+        if [ -n "$(ls -A "${WORKPATH}/files" 2>/dev/null)" ]; then
+         cp -rf ${WORKPATH}/files files
+         chmod -R 755 ${WORKPATH}/files/* ./
+        fi
+        if [ -n "$(ls -A "${WORKPATH}/sources" 2>/dev/null)" ]; then
+         cp -Rf ${WORKPATH}/sources/* ./
+        fi
+
+        echo "Write to the configuration file..."
+        mv ${WORKPATH}/$CONFIG_FILE .config
+        make defconfig
+
+    - name: SSH Remote Connection Server
+      uses: P3TERX/ssh2actions@v1.0.0
+      if: env.SSH_ACTIONS == 'true' || (github.event.inputs.ssh == 'ssh' && github.event.inputs.ssh  != 'true')
+      env:
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+    - name: Outputs compilation information
+      run: |
+        cd openwrt
+        echo " System Space Type Total Used Available Usage"
+        df -hT $PWD
+
+        echo
+        echo "=========================================="
+
+        grep -i CONFIG_PACKAGE_luci-app .config | grep  -v \# > Plug-in
+        grep -i CONFIG_PACKAGE_luci-theme .config | grep  -v \# >> Plug-in
+        sed -i '/INCLUDE/d' Plug-in > /dev/null 2>&1
+        sed -i 's/CONFIG_PACKAGE_/、/g' Plug-in
+        sed -i '/qbittorrent_static/d' Plug-in > /dev/null 2>&1
+        sed -i 's/=y/\ /g' Plug-in
+        awk '$0=NR$0' Plug-in > Plug-2
+        awk '{print "	" $0}' Plug-2 > Plug-in
+
+        echo
+        echo
+        echo "	      List of selected plug-ins"
+        cat Plug-in
+        rm -rf {Plug-in,Plug-2}
+
+        echo
+        echo "=========================================="
+
+        echo
+        echo
+        echo "Outputs the full plug-in information..."
+        echo
+        echo
+        cat .config
+
+    - name: Download the firmware package
+      run: |
+        cd openwrt && make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Start compiling the firmware
+      id: compile
+      run: |
+        cd openwrt
+        echo -e "$(($(nproc)+1)) thread compile"
+        make -j$(($(nproc)+1)) || make -j1 V=s
+
+    - name: Check space usage
+      run: |
+        echo "======================="
+        echo "Space usage:"
+        echo "======================="
+        df -hT
+        echo "======================="
+        du -h --max-depth=1 openwrt/ --exclude=build_dir --exclude=bin
+        du -h --max-depth=1 openwrt/build_dir
+        du -h --max-depth=1 openwrt/bin
+
+    - name: Organize the firmware files
+      id: organizer
+      run: |
+        mkdir -p ./artifact/firmware
+        mkdir -p ./artifact/pvekvm
+        mkdir -p ./artifact/hyperv
+        mkdir -p ./artifact/vmware
+        mkdir -p ./artifact/package
+        mkdir -p ./artifact/buildinfo
+        cp -rf openwrt/.config ./artifact/buildinfo/${{matrix.target}}.config
+        rm -rf $(find openwrt/bin/targets/ -type d -name "packages")
+        cp -rf $(find openwrt/bin/packages/ -type f -name "*.ipk") ./artifact/package/
+        cp -rf $(find openwrt/bin/targets/ -type f -name "*.buildinfo" -o -name "*.manifest") ./artifact/buildinfo/
+        cp -rf $(find openwrt/bin/targets/ -type f -name "*combined*img*") ./artifact/firmware/
+        cp -rf $(find openwrt/bin/targets/ -type f -name "*combined*qcow2*") ./artifact/pvekvm/ || true
+        cp -rf $(find openwrt/bin/targets/ -type f -name "*combined*vhdx*") ./artifact/hyperv/ || true
+        cp -rf $(find openwrt/bin/targets/ -type f -name "*combined*vmdk*") ./artifact/vmware/ || true
+        echo "::set-output name=status::success"
+        echo "Compile completion time..."
+        START_SECONDS=${{ env.START_SECONDS }}
+        END_TIME=`date +'%Y-%m-%d %H:%M:%S'`
+        END_SECONDS=$(date --date="$END_TIME" +%s)
+        SECONDS=$((END_SECONDS-START_SECONDS))
+        HOUR=$(( $SECONDS/3600 )) && MIN=$(( ($SECONDS-${HOUR}*3600)/60 )) && SEC=$(( $SECONDS-${HOUR}*3600-${MIN}*60 ))
+        echo "BUILD_TIME=${HOUR}时${MIN}分${SEC}秒" >> $GITHUB_ENV
+
+    - name: Upload the firmware file
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
+      uses: actions/upload-artifact@v2
+      with:
+        name: OpenWrt_firmware_${{matrix.target}}_${{ env.FILE_TIME }}
+        path: ./artifact/firmware/
+
+    - name: Upload the PVE/KVM image file
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_QCOW2 == 'true'
+      uses: actions/upload-artifact@v2
+      with:
+        name: OpenWrt_pvekvm_${{matrix.target}}_${{ env.FILE_TIME }}
+        path: ./artifact/pvekvm/
+
+    - name: Upload the Hyper-V image file
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_VHDX == 'true'
+      uses: actions/upload-artifact@v2
+      with:
+        name: OpenWrt_hyperv_${{matrix.target}}_${{ env.FILE_TIME }}
+        path: ./artifact/hyperv/
+
+    - name: Upload the VMware image file
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_VMDK == 'true'
+      uses: actions/upload-artifact@v2
+      with:
+        name: OpenWrt_vmware_${{matrix.target}}_${{ env.FILE_TIME }}
+        path: ./artifact/vmware/
+
+    - name: Upload the plugin package file
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_IPK == 'true'
+      uses: actions/upload-artifact@v2
+      with:
+        name: OpenWrt_package_${{matrix.target}}_${{ env.FILE_TIME }}
+        path: ./artifact/package/
+
+    - name: Upload firmware information
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_CONFIG == 'true'
+      uses: actions/upload-artifact@v2
+      with:
+        name: OpenWrt_buildinfo_${{matrix.target}}_${{ env.FILE_TIME }}
+        path: ./artifact/buildinfo/
+
+    - name: Upload the firmware to WeTransfer
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true'
+      run: |
+        curl -fsSL git.io/file-transfer | sh
+        ./transfer wet -s -p 16 --no-progress ./artifact/firmware/ 2>&1 | tee wetransfer.log
+        echo "WETRANSFER_URL=$(cat wetransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_ENV
+        sed -i "s/Download Link/WeTransfer/g" wetransfer.log
+        echo "::warning file=WeTransfer::$(cat wetransfer.log | grep https)"
+
+    - name: Automatically publish firmware to Releases
+      uses: ncipollo/release-action@v1
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+      with:
+        name: ${{ env.FILE_TIME1 }} 「 ${{ env.FIRMWARE_MESSAGE }} 」固件
+        tag: ${{ env.FILE_TIME2 }}-${{matrix.target}}
+        token: ${{ secrets.GIT_USER_TOKEN }}
+        body: |            
+            ★  source : ${{ env.REPO_URL }}
+            ★  branch : ${{ env.REPO_BRANCH }}
+            ★  Thanks to the source code author for sharing selflessly!
+
+            🎈 Compile Time:${{ env.FILE_TIME1 }}
+
+            ⏰ Build Time :${{ env.BUILD_TIME }}
+
+            🎉 [ ${{ env.FIRMWARE_MESSAGE }} ]Firmware download
+
+            ━━━━━━━━━━━━━━━━━━━━
+
+            ➤ WeTransfer： ${{ env.WETRANSFER_URL }}
+
+               The WeTransfer link is valid for 7 days and can be downloaded directly without registration
+
+            =========================================
+
+        artifacts: ./artifact/firmware/*
+
+    - name: Delete the run record
+      uses: db-one/delete-workflow-runs@main
+      with:
+        retain_days: 1     #How many records are retained is not deleted
+        keep_minimum_runs: 0
+
+    - name: Remove old firmware that is automatically released
+      uses: dev-drprasad/delete-older-releases@v0.1.0
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+      with:
+        keep_latest: 4         #How many releases are retained is not deleted
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GIT_USER_TOKEN }}
+
+    - name: Compile successful information notification - enterprise WeChat
+      if: steps.organizer.outputs.status == 'success' && env.WECHAT_WORK_PUSH == 'true'
+      run: |
+        curl "http://${{ secrets.WECHAT_WORK_URL }}/push?token=${{ secrets.WECHAT_WORK_TOKEN }}&message=Yours ${{ env.FIRMWARE_MESSAGE }}Successful compilation of the firmware completed! %0a%0a🎈Compile time：${{ env.FILE_TIME1 }}%0a%0a⏰Build Time：${{ env.BUILD_TIME }}%0a%0a🎉Publishing address：${{ env.GITHUB_RELEASE }}%0a%0a⛄WeTransfer：${{ env.WETRANSFER_URL }}%0a%0a🌴The firmware has been compiled🎈！！！" || true
+
+    - name: Compile success information notification-Telegram
+      if: steps.organizer.outputs.status == 'success' && env.TELEGRAM_BOT == 'true'
+      run: |
+        curl "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=您的${{ env.FIRMWARE_MESSAGE }}固件成功编译完成了！
+
+          🎈 Compile Time : ${{ env.FILE_TIME1 }}
+
+          ⏰ Build Time : ${{ env.BUILD_TIME }}
+
+          🎉 Latest Releases : ${{ env.GITHUB_RELEASE }}
+
+          ⛄ WeTransfer：${{ env.WETRANSFER_URL }}
+
+          🌴 Compiled into firmware has been compiled to work information notification 🎈！！！" >/dev/null 2>&1 && echo "ok..."
+
+
+
